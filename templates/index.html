@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Activa IT — Descargador Cartas Glosa Previsora</title>
+<style>
+  :root {
+    --red: #c0392b;
+    --red-dark: #96281b;
+    --red-light: #f8e8e7;
+    --green: #27ae60;
+    --green-light: #eafaf1;
+    --yellow: #f39c12;
+    --yellow-light: #fef9e7;
+    --blue: #2980b9;
+    --blue-light: #e8f4fd;
+    --gray: #ecf0f1;
+    --gray-dark: #95a5a6;
+    --text: #2c3e50;
+    --text-light: #7f8c8d;
+    --white: #ffffff;
+    --shadow: 0 2px 12px rgba(0,0,0,0.10);
+    --radius: 10px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: #f4f6f9;
+    color: var(--text);
+    min-height: 100vh;
+  }
+
+  header {
+    background: linear-gradient(135deg, var(--red) 0%, var(--red-dark) 100%);
+    color: white;
+    padding: 18px 32px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    box-shadow: 0 3px 12px rgba(192,57,43,0.3);
+  }
+  header .logo { font-size: 2rem; }
+  header h1 { font-size: 1.25rem; font-weight: 700; letter-spacing: -0.3px; }
+  header p  { font-size: 0.82rem; opacity: 0.85; margin-top: 2px; }
+
+  main {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 28px 24px;
+    display: grid;
+    grid-template-columns: 380px 1fr;
+    gap: 24px;
+    align-items: start;
+  }
+
+  .card {
+    background: var(--white);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+
+  .card-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid #f0f0f0;
+    font-weight: 700;
+    font-size: 0.92rem;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .card-header .icon { font-size: 1.1rem; }
+
+  .card-body { padding: 20px; }
+
+  .form-group { margin-bottom: 16px; }
+  label {
+    display: block;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-light);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 6px;
+  }
+  input[type=text], input[type=password] {
+    width: 100%;
+    padding: 10px 14px;
+    border: 1.5px solid #dde1e7;
+    border-radius: 7px;
+    font-size: 0.9rem;
+    color: var(--text);
+    background: #fafbfc;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    outline: none;
+  }
+  input[type=text]:focus, input[type=password]:focus {
+    border-color: var(--red);
+    box-shadow: 0 0 0 3px rgba(192,57,43,0.1);
+    background: white;
+  }
+
+  .periodo-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+    margin-top: 4px;
+  }
+  .periodo-btn {
+    padding: 7px 4px;
+    border: 1.5px solid #dde1e7;
+    border-radius: 6px;
+    background: #fafbfc;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-light);
+    cursor: pointer;
+    text-align: center;
+    transition: all 0.15s;
+  }
+  .periodo-btn:hover { border-color: var(--red); color: var(--red); background: var(--red-light); }
+  .periodo-btn.active { border-color: var(--red); background: var(--red); color: white; }
+
+  .btn-start {
+    width: 100%;
+    padding: 13px;
+    background: linear-gradient(135deg, var(--green), #1e8449);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: opacity 0.2s, transform 0.1s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 4px;
+  }
+  .btn-start:hover:not(:disabled) { opacity: 0.92; transform: translateY(-1px); }
+  .btn-start:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
+
+  .button-group {
+    display: flex;
+    gap: 10px;
+    margin-top: 12px;
+  }
+  .btn-stop {
+    flex: 1;
+    padding: 10px;
+    border: none;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: opacity 0.2s;
+    color: white;
+    background-color: #c0392b;
+  }
+  .btn-stop:hover { opacity: 0.9; }
+  .btn-reset {
+    flex: 1;
+    padding: 10px;
+    border: none;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: opacity 0.2s;
+    color: white;
+    background-color: #2980b9;
+  }
+  .btn-reset:hover { opacity: 0.9; }
+
+  .stats-bar {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+  .stat-box {
+    background: white;
+    border-radius: 9px;
+    padding: 14px 16px;
+    box-shadow: var(--shadow);
+    text-align: center;
+    border-top: 3px solid var(--gray);
+  }
+  .stat-box.total   { border-color: var(--blue); }
+  .stat-box.ok      { border-color: var(--green); }
+  .stat-box.error   { border-color: var(--red); }
+  .stat-box .val { font-size: 2rem; font-weight: 800; line-height: 1; }
+  .stat-box.total .val   { color: var(--blue); }
+  .stat-box.ok .val      { color: var(--green); }
+  .stat-box.error .val   { color: var(--red); }
+  .stat-box .lbl { font-size: 0.74rem; color: var(--text-light); margin-top: 4px; text-transform: uppercase; font-weight: 600; letter-spacing: 0.4px; }
+
+  .progress-wrap { margin-bottom: 18px; }
+  .progress-bar-bg {
+    height: 8px;
+    background: #eee;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .progress-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--green), #1e8449);
+    border-radius: 10px;
+    transition: width 0.4s ease;
+    width: 0%;
+  }
+  .progress-label { font-size: 0.78rem; color: var(--text-light); margin-top: 5px; }
+
+  .log-console {
+    background: #1e2329;
+    border-radius: 8px;
+    padding: 14px 16px;
+    height: 360px;
+    overflow-y: auto;
+    font-family: 'Fira Mono', 'Cascadia Code', 'Consolas', monospace;
+    font-size: 0.78rem;
+    line-height: 1.7;
+    color: #abb2bf;
+  }
+  .log-console::-webkit-scrollbar { width: 5px; }
+  .log-console::-webkit-scrollbar-track { background: #2c313a; }
+  .log-console::-webkit-scrollbar-thumb { background: #4a5065; border-radius: 4px; }
+
+  .log-line { display: flex; gap: 10px; }
+  .log-ts  { color: #5c6370; flex-shrink: 0; }
+  .log-msg { flex: 1; word-break: break-word; }
+  .log-line.info    .log-msg { color: #abb2bf; }
+  .log-line.success .log-msg { color: #98c379; }
+  .log-line.error   .log-msg { color: #e06c75; }
+  .log-line.warn    .log-msg { color: #e5c07b; }
+
+  .file-list { max-height: 220px; overflow-y: auto; }
+  .file-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    border-radius: 6px;
+    font-size: 0.83rem;
+    transition: background 0.15s;
+  }
+  .file-item:hover { background: #f4f6f9; }
+  .file-item .icon { font-size: 1.1rem; flex-shrink: 0; }
+  .file-item .name { flex: 1; color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file-item .size { color: var(--text-light); font-size: 0.75rem; flex-shrink: 0; }
+  .file-item a { color: var(--red); text-decoration: none; font-size: 0.75rem; font-weight: 600; flex-shrink: 0; }
+  .file-item a:hover { text-decoration: underline; }
+  .file-empty { color: var(--text-light); font-size: 0.84rem; text-align: center; padding: 30px 0; }
+
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border-radius: 20px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    margin-bottom: 16px;
+  }
+  .status-badge.idle     { background: #f0f0f0; color: var(--text-light); }
+  .status-badge.running  { background: var(--yellow-light); color: var(--yellow); }
+  .status-badge.done     { background: var(--green-light); color: var(--green); }
+  .status-badge.error    { background: var(--red-light); color: var(--red); }
+
+  .spinner {
+    width: 10px; height: 10px;
+    border: 2px solid currentColor;
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    display: inline-block;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .path-display {
+    background: #f4f6f9;
+    border: 1px solid #dde1e7;
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-family: monospace;
+    font-size: 0.78rem;
+    color: var(--text-light);
+    margin-top: 8px;
+    word-break: break-all;
+  }
+
+  .alert {
+    padding: 10px 14px;
+    border-radius: 7px;
+    font-size: 0.83rem;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .alert.info  { background: #ebf5fb; color: var(--blue); border-left: 3px solid var(--blue); }
+  .alert.error { background: var(--red-light); color: var(--red); border-left: 3px solid var(--red); }
+
+  @media (max-width: 800px) {
+    main { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">🏥</div>
+  <div>
+    <h1>Descargador de Cartas Glosa — Previsora SOAT</h1>
+    <p>Activa IT · Automatización de descarga de archivos Envios_D y ActaDevolucion</p>
+  </div>
+</header>
+
+<main>
+
+  <!-- Panel izquierdo: Configuración -->
+  <div>
+    <div class="card">
+      <div class="card-header"><span class="icon">⚙️</span> Configuración</div>
+      <div class="card-body">
+
+        <div class="form-group">
+          <label>Usuario</label>
+          <input type="text" id="usuario" value="" placeholder="Ej: PREV900600550" autocomplete="username">
+        </div>
+
+        <div class="form-group">
+          <label>Contraseña</label>
+          <input type="password" id="password" value="" placeholder="Contraseña" autocomplete="current-password">
+        </div>
+
+        <div class="form-group">
+          <label>Período a revisar</label>
+          <div class="periodo-grid" id="periodoGrid">
+            <!-- generado por JS -->
+          </div>
+          <input type="text" id="periodoCustom" placeholder="Ej: Abr26" style="margin-top:8px;" readonly>
+        </div>
+
+        <div class="form-group">
+          <label>Carpeta de descarga (opcional)</label>
+          <input type="text" id="downloadPath" placeholder="Dejar vacío para usar carpeta por defecto">
+          <div class="path-display" id="pathDisplay">📂 Se usará: downloads/[periodo]/</div>
+        </div>
+
+        <div class="alert info">
+          ℹ️ Se descargarán: <strong>Envios_D</strong> (Auditada: Pendiente) y <strong>ActaDevolucion</strong> (Devolución de entrada)
+        </div>
+
+        <button class="btn-start" id="btnStart" onclick="startJob()">
+          <span>🚀</span> Iniciar descarga automática
+        </button>
+
+        <div class="button-group">
+          <button class="btn-stop" id="btnStop">⏹️ Detener</button>
+          <button class="btn-reset" id="btnReset">🔄 Reiniciar</button>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- Panel derecho: Progreso + Logs + Archivos -->
+  <div style="display:flex; flex-direction:column; gap:18px;">
+
+    <!-- Status + Stats -->
+    <div class="card">
+      <div class="card-header"><span class="icon">📊</span> Progreso</div>
+      <div class="card-body">
+
+        <div id="statusBadge" class="status-badge idle">
+          <span>●</span> <span id="statusText">En espera</span>
+        </div>
+
+        <div class="stats-bar">
+          <div class="stat-box total">
+            <div class="val" id="statTotal">0</div>
+            <div class="lbl">Encontradas</div>
+          </div>
+          <div class="stat-box ok">
+            <div class="val" id="statOk">0</div>
+            <div class="lbl">Descargadas</div>
+          </div>
+          <div class="stat-box error">
+            <div class="val" id="statError">0</div>
+            <div class="lbl">Errores</div>
+          </div>
+        </div>
+
+        <div class="progress-wrap">
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="progressBar"></div>
+          </div>
+          <div class="progress-label" id="progressLabel">0 de 0 facturas procesadas</div>
+        </div>
+
+        <div id="errorAlert" style="display:none;" class="alert error"></div>
+
+      </div>
+    </div>
+
+    <!-- Log console -->
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">📋</span> Log de ejecución
+        <button onclick="clearLogs()" style="margin-left:auto; background:none; border:1px solid #dde1e7; border-radius:5px; padding:3px 10px; font-size:0.75rem; cursor:pointer; color:var(--text-light);">Limpiar</button>
+      </div>
+      <div class="card-body" style="padding:12px;">
+        <div class="log-console" id="logConsole">
+          <div class="log-line info"><span class="log-ts">--:--:--</span><span class="log-msg">Listo para iniciar. Configure los parámetros y presione "Iniciar descarga".</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Archivos descargados -->
+    <div class="card">
+      <div class="card-header">
+        <span class="icon">📁</span> Archivos descargados
+        <button onclick="refreshFiles()" style="margin-left:auto; background:none; border:1px solid #dde1e7; border-radius:5px; padding:3px 10px; font-size:0.75rem; cursor:pointer; color:var(--text-light);">↻ Actualizar</button>
+      </div>
+      <div class="card-body" style="padding:10px;">
+        <div class="file-list" id="fileList">
+          <div class="file-empty">Sin archivos descargados aún.</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<script>
+// ── Períodos ──────────────────────────────────────────────────────────────
+const MESES = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
+let selectedPeriodo = "";
+
+function buildPeriodGrid() {
+  const grid = document.getElementById("periodoGrid");
+  const now = new Date();
+  const periods = [];
+  for (let i = 0; i < 6; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const label = MESES[d.getMonth()] + String(d.getFullYear()).slice(2);
+    periods.push(label);
+  }
+  grid.innerHTML = periods.map(p =>
+    `<button class="periodo-btn" onclick="selectPeriodo('${p}')">${p}</button>`
+  ).join("");
+  selectPeriodo(periods[0]);
+}
+
+function selectPeriodo(p) {
+  selectedPeriodo = p;
+  document.getElementById("periodoCustom").value = p;
+  document.querySelectorAll(".periodo-btn").forEach(b => {
+    b.classList.toggle("active", b.textContent === p);
+  });
+  updatePathDisplay();
+}
+
+function updatePathDisplay() {
+  const custom = document.getElementById("downloadPath").value.trim();
+  const display = custom ? `📂 ${custom}` : `📂 Se usará: downloads/${selectedPeriodo || "[periodo]"}/`;
+  document.getElementById("pathDisplay").textContent = display;
+}
+document.getElementById("downloadPath").addEventListener("input", updatePathDisplay);
+
+// ── Job ───────────────────────────────────────────────────────────────────
+let polling = null;
+let logCount = 0;
+
+async function startJob() {
+  const usuario = document.getElementById("usuario").value.trim();
+  const password = document.getElementById("password").value.trim();
+  const periodo  = document.getElementById("periodoCustom").value.trim();
+  const dlPath   = document.getElementById("downloadPath").value.trim();
+
+  if (!usuario || !password || !periodo) {
+    alert("Por favor completa usuario, contraseña y período.");
+    return;
+  }
+
+  document.getElementById("btnStart").disabled = true;
+  document.getElementById("logConsole").innerHTML = "";
+  logCount = 0;
+  setStatus("running");
+  document.getElementById("errorAlert").style.display = "none";
+
+  const resp = await fetch("/api/start", {
+    method: "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({usuario, password, periodo, download_path: dlPath})
+  });
+  const data = await resp.json();
+
+  if (!data.ok) {
+    setStatus("error");
+    showError(data.error);
+    document.getElementById("btnStart").disabled = false;
+    return;
+  }
+
+  addLog({ts: "--:--:--", msg: `🚀 Proceso iniciado | Período: ${periodo} | Destino: ${data.download_path}`, level: "info"});
+  if (polling) clearInterval(polling);
+  polling = setInterval(pollStatus, 1500);
+}
+
+async function pollStatus() {
+  try {
+    const resp = await fetch(`/api/logs?since=${logCount}`);
+    const data = await resp.json();
+
+    data.logs.forEach(l => addLog(l));
+    logCount += data.logs.length;
+
+    const sr = await fetch("/api/status");
+    const s = await sr.json();
+
+    updateStats(s.stats);
+
+    if (!s.running) {
+      clearInterval(polling);
+      polling = null;
+      if (s.error) {
+        setStatus("error");
+        showError(s.error);
+      } else {
+        setStatus("done");
+      }
+      document.getElementById("btnStart").disabled = false;
+      refreshFiles();
+    }
+  } catch(e) {
+    console.error(e);
+  }
+}
+
+function updateStats(stats) {
+  document.getElementById("statTotal").textContent = stats.total;
+  document.getElementById("statOk").textContent    = stats.descargadas;
+  document.getElementById("statError").textContent = stats.errores;
+
+  const pct = stats.total > 0
+    ? Math.round(((stats.descargadas + stats.errores) / stats.total) * 100)
+    : 0;
+  document.getElementById("progressBar").style.width = pct + "%";
+  document.getElementById("progressLabel").textContent =
+    `${stats.descargadas + stats.errores} de ${stats.total} facturas procesadas`;
+}
+
+function setStatus(st) {
+  const badge = document.getElementById("statusBadge");
+  const txt   = document.getElementById("statusText");
+  badge.className = "status-badge " + st;
+  const map = {idle:"En espera", running:"Procesando...", done:"Completado ✓", error:"Error"};
+  if (st === "running") {
+    txt.innerHTML = `<span class="spinner"></span> Procesando...`;
+  } else {
+    txt.textContent = map[st] || st;
+  }
+}
+
+function showError(msg) {
+  const el = document.getElementById("errorAlert");
+  el.style.display = "flex";
+  el.textContent = "❌ " + msg;
+}
+
+// ── Logs ──────────────────────────────────────────────────────────────────
+function addLog(l) {
+  const c = document.getElementById("logConsole");
+  const div = document.createElement("div");
+  div.className = "log-line " + (l.level || "info");
+  div.innerHTML = `<span class="log-ts">${l.ts}</span><span class="log-msg">${escHtml(l.msg)}</span>`;
+  c.appendChild(div);
+  c.scrollTop = c.scrollHeight;
+}
+
+function clearLogs() {
+  document.getElementById("logConsole").innerHTML = "";
+  logCount = 0;
+  fetch('/api/logs', { method: 'DELETE' }).catch(console.error);
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+// ── Archivos ──────────────────────────────────────────────────────────────
+async function refreshFiles() {
+  const periodo = document.getElementById("periodoCustom").value.trim();
+  const resp = await fetch(`/api/files?periodo=${encodeURIComponent(periodo)}`);
+  const data = await resp.json();
+  const list = document.getElementById("fileList");
+
+  if (!data.files.length) {
+    list.innerHTML = '<div class="file-empty">Sin archivos descargados aún.</div>';
+    return;
+  }
+
+  list.innerHTML = data.files.map(f => `
+    <div class="file-item">
+      <span class="icon">📄</span>
+      <span class="name" title="${f.name}">${f.name}</span>
+      <span class="size">${fmtSize(f.size)}</span>
+      <a href="/downloads/${f.periodo ? f.periodo+'/' : ''}${f.name}" download>⬇ Descargar</a>
+    </div>
+  `).join("");
+}
+
+function fmtSize(bytes) {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + " KB";
+  return (bytes/1024/1024).toFixed(1) + " MB";
+}
+
+// ── Botones Detener y Reiniciar ─────────────────────────────────────────
+document.getElementById("btnStop").addEventListener("click", async () => {
+  const resp = await fetch("/api/stop", { method: "POST" });
+  const data = await resp.json();
+  alert(data.message);
+});
+
+document.getElementById("btnReset").addEventListener("click", async () => {
+  const resp = await fetch("/api/reset", { method: "POST" });
+  const data = await resp.json();
+  alert(data.message);
+  clearLogs();
+  refreshFiles();
+  setStatus("idle");
+  document.getElementById("btnStart").disabled = false;
+  if (polling) clearInterval(polling);
+  polling = null;
+  logCount = 0;
+});
+
+// ── Init ──────────────────────────────────────────────────────────────────
+buildPeriodGrid();
+refreshFiles();
+</script>
+</body>
+</html>

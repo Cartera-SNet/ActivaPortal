@@ -1,0 +1,1 @@
+web: pip install --no-cache-dir -r requirements.txt && python -m playwright install chromium --with-deps && python app.py
