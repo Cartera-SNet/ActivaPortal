@@ -690,7 +690,7 @@ def run_automation(usuario: str, password: str, periodo: str, download_path: str
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=False)
+            browser = p.chromium.launch(headless=True)
             context = browser.new_context(accept_downloads=True, viewport={"width": 1500, "height": 900})
             page = context.new_page()
             current_browser = browser
