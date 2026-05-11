@@ -1,22 +1,34 @@
 """
 Activa IT - Descargador automático de cartas glosa (Previsora SOAT)
-Versión mejorada para Railway: Detener/Reiniciar, Carpetas por IPS, Excel, Doble búsqueda
+Versión mejorada con:
+- Detener/Reiniciar
+- Carpetas por IPS
+- Reporte Excel (descargadas + errores)
+- Búsqueda flexible (Envios_D / Carta de Objeción) con filtro correcto
+- Persistencia (reanudación automática)
+- Importación opcional de lista de facturas (CSV/Excel)
+- Generación de ZIP parcial al detener o ante error (incluye Excel parcial y Errores)
+- ZIP final incluye Excel y carpeta Errores
+- API para consultar progreso y exportar a Excel
 """
 
 import os
 import re
 import json
+import csv
 import time
 import threading
 import logging
+import zipfile
 from datetime import datetime
 from pathlib import Path
-from flask import Flask, render_template, request, jsonify, send_from_directory
+from flask import Flask, render_template, request, jsonify, send_from_directory, send_file
+from io import BytesIO
 
 # Para generar Excel
 try:
     import openpyxl
-    from openpyxl.styles import Font, PatternFill
+    from openpyxl.styles import Font
     EXCEL_AVAILABLE = True
 except ImportError:
     EXCEL_AVAILABLE = False
@@ -57,10 +69,14 @@ job_state = {
     "error": None,
     "errores_detalle": [],
     "descargas_exitosas": [],
+    "facturas_permitidas": [],
 }
 job_lock = threading.Lock()
 current_browser = None
 current_context = None
+current_dl_dir = None
+current_periodo = None
+current_ips_nombre = None
 
 def log(msg, level="info"):
     ts = datetime.now().strftime("%H:%M:%S")
@@ -82,18 +98,145 @@ def reset_state():
         job_state["error"] = None
         job_state["errores_detalle"] = []
         job_state["descargas_exitosas"] = []
+        job_state["facturas_permitidas"] = []
 
 def stop_job():
-    global current_browser, current_context
+    global current_browser, current_context, current_dl_dir, current_periodo, current_ips_nombre
     with job_lock:
         job_state["stopping"] = True
+    log("🛑 Solicitando detención del proceso...", "warn")
     if current_browser:
         try:
             current_browser.close()
-            log("🛑 Navegador cerrado por solicitud de detención.")
-        except:
-            pass
-    log("🛑 Proceso detenido por el usuario.")
+            log("  → Navegador cerrado por solicitud de stop.")
+        except Exception as e:
+            log(f"  → Error al cerrar navegador: {e}", "error")
+    # Generar ZIP parcial si hay archivos descargados y tenemos los datos necesarios
+    generar_zip_parcial()
+
+def generar_zip_parcial():
+    """Genera un ZIP con los PDFs ya descargados hasta el momento,
+       incluyendo un reporte Excel parcial y la carpeta Errores."""
+    global current_dl_dir, current_periodo, current_ips_nombre
+    if not current_dl_dir or not current_periodo or not current_ips_nombre:
+        return
+    ips_dir = current_dl_dir / current_ips_nombre
+    if not ips_dir.exists():
+        return
+
+    # Obtener los datos actuales de descargas y errores
+    with job_lock:
+        exitosas = job_state["descargas_exitosas"].copy()
+        errores = job_state["errores_detalle"].copy()
+
+    # Generar un Excel parcial (si hay datos o si openpyxl está disponible)
+    excel_parcial_path = None
+    if EXCEL_AVAILABLE:
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            excel_name = f"reporte_parcial_{timestamp}.xlsx"
+            excel_parcial_path = ips_dir / excel_name
+            wb = openpyxl.Workbook()
+            ws_exit = wb.active
+            ws_exit.title = "Descargadas"
+            ws_exit.append(["N° Factura", "Estado", "IPS", "Archivo Descargado", "Fecha/Hora"])
+            for ex in exitosas:
+                ws_exit.append([ex.get("factura"), ex.get("estado"), current_ips_nombre, ex.get("archivo"), ex.get("timestamp")])
+            ws_err = wb.create_sheet("Errores")
+            ws_err.append(["N° Factura", "Estado", "IPS", "Error", "Captura pantalla", "Fecha/Hora"])
+            for err in errores:
+                ws_err.append([err.get("factura"), err.get("estado"), current_ips_nombre, err.get("error"), err.get("captura"), err.get("timestamp")])
+            wb.save(excel_parcial_path)
+            log(f"📊 Reporte Excel parcial generado: {excel_parcial_path}")
+        except Exception as e:
+            log(f"⚠️ No se pudo generar Excel parcial: {e}", "warn")
+            excel_parcial_path = None
+
+    # Recopilar archivos a incluir
+    archivos_a_incluir = []
+    # PDFs
+    archivos_a_incluir.extend(ips_dir.rglob("*.pdf"))
+    # Excel parcial (si existe)
+    if excel_parcial_path and excel_parcial_path.exists():
+        archivos_a_incluir.append(excel_parcial_path)
+    # Carpeta Errores
+    errores_dir = ips_dir / "Errores"
+    if errores_dir.exists():
+        archivos_a_incluir.extend(errores_dir.rglob("*"))
+
+    if not archivos_a_incluir:
+        return
+
+    try:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        zip_name = f"facturas_{current_periodo}_PARCIAL_{timestamp}.zip"
+        zip_path = current_dl_dir / zip_name
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for archivo in archivos_a_incluir:
+                arcname = archivo.relative_to(current_dl_dir)
+                zf.write(archivo, arcname=str(arcname))
+        log(f"📦 ZIP parcial generado (detención/error): {zip_path}")
+    except Exception as e:
+        log(f"⚠️ No se pudo generar ZIP parcial: {e}", "warn")
+
+def crear_zip_completo(dl_dir, periodo, ips_nombre):
+    """Crea ZIP final incluyendo PDFs, Excel final y carpeta Errores."""
+    try:
+        zip_final_name = f"facturas_{periodo}.zip"
+        zip_final_path = dl_dir / zip_final_name
+        with zipfile.ZipFile(zip_final_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            ips_dir = dl_dir / ips_nombre
+            if ips_dir.exists():
+                # PDFs
+                for pdf in ips_dir.rglob("*.pdf"):
+                    zf.write(pdf, arcname=str(pdf.relative_to(dl_dir)))
+                # Excel final (sin "_PARCIAL_" en el nombre)
+                for excel in ips_dir.glob("reporte_*.xlsx"):
+                    if "_PARCIAL_" not in excel.name:
+                        zf.write(excel, arcname=str(excel.relative_to(dl_dir)))
+                # Errores
+                errores_dir = ips_dir / "Errores"
+                if errores_dir.exists():
+                    for err_file in errores_dir.rglob("*"):
+                        zf.write(err_file, arcname=str(err_file.relative_to(dl_dir)))
+        log(f"📦 ZIP final generado: {zip_final_path}")
+        return str(zip_final_path)
+    except Exception as e:
+        log(f"⚠️ No se pudo generar el ZIP final: {e}", "warn")
+        return None
+
+# ==================== PERSISTENCIA (REANUDACIÓN) ====================
+def cargar_progreso(ips_dir):
+    progreso_path = ips_dir / "progreso.json"
+    if progreso_path.exists():
+        try:
+            with open(progreso_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                # El progreso puede ser una lista simple o un diccionario con timestamps
+                completadas = data.get("completadas", [])
+                if isinstance(completadas, list):
+                    return set(completadas)
+                elif isinstance(completadas, dict):
+                    return set(completadas.keys())
+                else:
+                    return set()
+        except Exception as e:
+            log(f"⚠️ Error al leer progreso: {e}", "warn")
+    return set()
+
+def guardar_progreso(ips_dir, completadas):
+    """Guardar progreso. completadas es un set de números de factura."""
+    progreso_path = ips_dir / "progreso.json"
+    try:
+        # Convertir el set a lista para JSON
+        data = {
+            "completadas": list(completadas),
+            "actualizado": datetime.now().isoformat()
+        }
+        with open(progreso_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        log(f"⚠️ Error al guardar progreso: {e}", "warn")
 
 # ==================== GENERADOR DE EXCEL ====================
 def generar_reporte_excel(dl_dir, periodo, ips_nombre, exitosas, errores):
@@ -391,7 +534,24 @@ def _download_factura(page, context, modal_frame, fac: dict, dl_dir: Path, ips_n
 
     search_frame = adjuntos_frame
 
+    # Función mejorada para escribir en el buscador y disparar la lupa
     def _escribir_buscador(texto):
+        # Limpiar input antes
+        search_frame.evaluate("""
+            () => {
+                const inputs = document.querySelectorAll('input');
+                for (const input of inputs) {
+                    const ph = (input.placeholder || '').toLowerCase();
+                    if (ph.includes('buscar') || ph.includes('filtrar') || ph.includes('nombre')) {
+                        input.value = '';
+                        input.dispatchEvent(new Event('input', { bubbles: true }));
+                        break;
+                    }
+                }
+            }
+        """)
+        time.sleep(0.5)
+        # Escribir el texto y disparar eventos
         search_frame.evaluate(f"""
             () => {{
                 const target = '{texto.replace('í', 'i')}';
@@ -412,6 +572,7 @@ def _download_factura(page, context, modal_frame, fac: dict, dl_dir: Path, ips_n
                 else searchInput.value = target;
                 searchInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
                 searchInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                // Buscar botón de lupa
                 let parent = searchInput.closest('div, td, form, span');
                 if (parent) {{
                     const btns = parent.querySelectorAll('button, a, [role="button"], span');
@@ -419,13 +580,24 @@ def _download_factura(page, context, modal_frame, fac: dict, dl_dir: Path, ips_n
                         const html = (btn.outerHTML || '').toLowerCase();
                         const title = (btn.title || '').toLowerCase();
                         if (html.includes('search') || html.includes('lup') || title.includes('search')) {{
-                            btn.click(); return;
+                            btn.click();
+                            return;
                         }}
                     }}
                 }}
+                const svgs = document.querySelectorAll('svg');
+                for (const svg of svgs) {{
+                    if ((svg.outerHTML || '').toLowerCase().includes('search')) {{
+                        const container = svg.closest('button, a, [role="button"]');
+                        if (container) {{ container.click(); return; }}
+                    }}
+                }}
+                // Fallback: presionar Enter
+                searchInput.dispatchEvent(new KeyboardEvent('keypress', {{ key: 'Enter', bubbles: true }}));
             }}
         """)
         time.sleep(2)
+        # Esperar a que termine "Procesando Solicitud"
         for _ in range(40):
             if job_state.get("stopping"): return
             processing = False
@@ -441,6 +613,7 @@ def _download_factura(page, context, modal_frame, fac: dict, dl_dir: Path, ips_n
             time.sleep(0.5)
         time.sleep(2)
 
+    # ---------- PRIMERA BÚSQUEDA: ENVIOS_D / ACTADEVOLUCION ----------
     log(f"    🔍 Buscando '{target_label}'...")
     _escribir_buscador(target_label)
     archivo_seleccionado = False
@@ -499,59 +672,70 @@ def _download_factura(page, context, modal_frame, fac: dict, dl_dir: Path, ips_n
         log(f"    🔄 Reintentando selección ({intento+1}/4)...")
         time.sleep(2)
 
+    # ---------- SEGUNDA BÚSQUEDA: CARTA DE OBJECIÓN (si no se encontró) ----------
     if not archivo_seleccionado:
-        log(f"    ⚠️ No se encontró '{target_label}'. Intentando con 'Carta de Objeción'...")
-        _escribir_buscador("Carta de Objeción")
-        posibles_nombres_2 = ["Carta de Objeción", "Carta de Objeción".replace('ó', 'o')]
+        log(f"    ⚠️ No se encontró '{target_label}'. Intentando con 'Carta de'...")
+        texto_busqueda = "Carta de"
+        _escribir_buscador(texto_busqueda)
+        
+        archivo_seleccionado = False
         for intento in range(4):
             if job_state.get("stopping"): return
             for fr in page.frames:
                 try:
                     resultado = fr.evaluate(f"""
                         () => {{
-                            const nombres = {json.dumps(posibles_nombres_2)};
-                            let contenedor = null;
+                            const buscarTexto = '{texto_busqueda}';
+                            function normalizar(s) {{
+                                return s.toLowerCase().normalize("NFD").replace(/[\\u0300-\\u036f]/g, "");
+                            }}
                             const elementos = document.querySelectorAll('td, div, span, li, p, tr');
                             for (const el of elementos) {{
                                 const txt = (el.innerText || '').trim();
-                                for (const nombre of nombres) {{
-                                    if (txt === nombre) {{
-                                        contenedor = el.closest('div[class*="file"], li[class*="file"], tr');
-                                        if (!contenedor) contenedor = el.closest('div, li, tr');
-                                        break;
+                                if (normalizar(txt).includes(normalizar(buscarTexto))) {{
+                                    let contenedor = el.closest('div[class*="file"], li[class*="file"], tr, div[class*="item"], div[class*="attach"], div[class*="row"]');
+                                    if (!contenedor) contenedor = el.closest('div, li, tr');
+                                    if (contenedor) {{
+                                        let check = contenedor.querySelector('input[type="checkbox"], input[type="radio"], [role="checkbox"]');
+                                        if (!check) check = contenedor.parentElement?.querySelector('input[type="checkbox"], input[type="radio"], [role="checkbox"]');
+                                        if (check) {{
+                                            if (!check.checked) {{
+                                                check.click();
+                                                check.checked = true;
+                                                check.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                                            }}
+                                            return {{ ok: true, metodo: 'checkbox', texto: txt }};
+                                        }}
+                                        let iconoPdf = contenedor.querySelector('img[src*="pdf"], svg[aria-label*="pdf"], i[class*="pdf"]');
+                                        if (iconoPdf) {{
+                                            iconoPdf.click();
+                                            return {{ ok: true, metodo: 'icono_pdf', texto: txt }};
+                                        }}
+                                        contenedor.click();
+                                        contenedor.dispatchEvent(new MouseEvent('click', {{ bubbles: true, cancelable: true }}));
+                                        contenedor.dispatchEvent(new MouseEvent('dblclick', {{ bubbles: true, cancelable: true }}));
+                                        return {{ ok: true, metodo: 'contenedor_forzado', texto: txt }};
                                     }}
                                 }}
-                                if (contenedor) break;
                             }}
-                            if (!contenedor) return {{ ok: false }};
-                            let check = contenedor.querySelector('input[type="checkbox"], input[type="radio"], [role="checkbox"]');
-                            if (!check) check = contenedor.parentElement?.querySelector('input[type="checkbox"], input[type="radio"], [role="checkbox"]');
-                            if (check) {{
-                                if (!check.checked) {{
-                                    check.click();
-                                    check.checked = true;
-                                    check.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                                }}
-                                return {{ ok: true, metodo: 'checkbox' }};
-                            }}
-                            contenedor.click();
-                            contenedor.dispatchEvent(new MouseEvent('click', {{ bubbles: true, cancelable: true }}));
-                            return {{ ok: true, metodo: 'contenedor_forzado' }};
+                            return {{ ok: false }};
                         }}
                     """)
                     if resultado and resultado.get('ok'):
-                        log(f"    ✅ Selección realizada con 'Carta de Objeción'")
+                        log(f"    ✅ Selección realizada con '{texto_busqueda}' (método: {resultado.get('metodo')}) - Texto encontrado: '{resultado.get('texto')}'")
                         archivo_seleccionado = True
                         break
-                except:
-                    pass
+                except Exception as e:
+                    log(f"    ⚠️ Error en intento {intento+1} para '{texto_busqueda}': {e}", "warn")
             if archivo_seleccionado:
                 break
+            log(f"    🔄 Reintentando '{texto_busqueda}' ({intento+1}/4)...")
             time.sleep(2)
 
     if not archivo_seleccionado:
-        raise Exception(f"No se pudo seleccionar el archivo (intentó '{target_label}' y 'Carta de Objeción')")
+        raise Exception(f"No se pudo seleccionar el archivo (intentó '{target_label}' y 'Carta de')")
 
+    # Confirmar que no haya mensaje de error "Debe seleccionar..."
     log("    ⏳ Esperando confirmación de selección...")
     for _ in range(20):
         if job_state.get("stopping"): return
@@ -568,6 +752,7 @@ def _download_factura(page, context, modal_frame, fac: dict, dl_dir: Path, ips_n
             break
         time.sleep(1)
 
+    # ---------- ABRIR DOCUMENTO ----------
     log(f"    👁️ Buscando botón 'Abrir Documento'...")
     pdf_data = None
     pdf_url = None
@@ -682,15 +867,20 @@ def _download_factura(page, context, modal_frame, fac: dict, dl_dir: Path, ips_n
 
 def run_automation(usuario: str, password: str, periodo: str, download_path: str):
     from playwright.sync_api import sync_playwright
-    global current_browser, current_context
+    global current_browser, current_context, current_dl_dir, current_periodo, current_ips_nombre
 
     dl_dir = Path(download_path)
     dl_dir.mkdir(parents=True, exist_ok=True)
     ips_nombre_actual = "IPS_SIN_NOMBRE"
+    zip_parcial_generado = False
+
+    # Guardar globales para posible ZIP parcial
+    current_dl_dir = dl_dir
+    current_periodo = periodo
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(headless=False)
             context = browser.new_context(accept_downloads=True, viewport={"width": 1500, "height": 900})
             page = context.new_page()
             current_browser = browser
@@ -782,6 +972,7 @@ def run_automation(usuario: str, password: str, periodo: str, download_path: str
 
             log("🏥 Obteniendo nombre de la IPS...")
             ips_nombre_actual = _extraer_nombre_ips(page, target_frame)
+            current_ips_nombre = ips_nombre_actual
 
             if job_state.get("stopping"): return
             log(f"📅 Click en columna Cant del período '{periodo}'...")
@@ -919,26 +1110,73 @@ def run_automation(usuario: str, password: str, periodo: str, download_path: str
             log(f"📊 {len(facturas_acumuladas)} facturas detectadas.")
             facturas_objetivo = facturas_acumuladas
 
+            # ========== PERSISTENCIA Y FILTRO ==========
+            ips_dir = dl_dir / ips_nombre_actual
+            completadas = cargar_progreso(ips_dir)
+
+            # Filtrar facturas ya descargadas
+            facturas_pendientes = []
+            for fac in facturas_objetivo:
+                if fac['num'] in completadas:
+                    log(f"⏭️ Factura {fac['num']} ya descargada en ejecución anterior, omitiendo.")
+                    with job_lock:
+                        job_state["stats"]["descargadas"] += 1
+                        job_state["descargas_exitosas"].append({
+                            "factura": fac['num'],
+                            "estado": fac['estado'],
+                            "archivo": str(ips_dir / ("Auditada" if fac['tipo']=='auditada' else "Devolucion") / f"{fac['num']}_{('Envios_D' if fac['tipo']=='auditada' else 'ActaDevolucion')}.pdf"),
+                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        })
+                else:
+                    facturas_pendientes.append(fac)
+
+            # Aplicar filtro opcional por lista de facturas permitidas
             with job_lock:
-                job_state["stats"]["total"] = len(facturas_objetivo)
-            cnt_aud = sum(1 for f in facturas_objetivo if f["tipo"] == "auditada")
-            cnt_dev = sum(1 for f in facturas_objetivo if f["tipo"] == "devolucion")
-            log("📋 RESUMEN:")
+                permitidas = job_state.get("facturas_permitidas", [])
+            if permitidas:
+                original_count = len(facturas_pendientes)
+                facturas_pendientes = [fac for fac in facturas_pendientes if fac['num'] in permitidas]
+                log(f"📋 Filtro activo: solo {len(facturas_pendientes)} de {original_count} facturas están en la lista permitida.")
+
+            log(f"📋 Facturas pendientes por procesar en esta ejecución: {len(facturas_pendientes)}")
+
+            # Actualizar estadísticas totales
+            with job_lock:
+                job_state["stats"]["total"] = len(facturas_pendientes) + job_state["stats"]["descargadas"]
+                job_state["stats"]["errores"] = 0
+
+            cnt_aud = sum(1 for f in facturas_pendientes if f["tipo"] == "auditada")
+            cnt_dev = sum(1 for f in facturas_pendientes if f["tipo"] == "devolucion")
+            log("📋 RESUMEN DE FACTURAS PENDIENTES:")
             log(f"  • Auditada: {cnt_aud}")
             log(f"  • Devolucion: {cnt_dev}")
-            log(f"  TOTAL: {len(facturas_objetivo)}")
-            if not facturas_objetivo:
-                log("ℹ️ No hay facturas con los estados requeridos.")
+            log(f"  TOTAL: {len(facturas_pendientes)}")
+            if not facturas_pendientes:
+                log("ℹ️ No hay facturas pendientes por procesar.")
                 browser.close()
+                with job_lock:
+                    exitosas = job_state["descargas_exitosas"].copy()
+                    errores = job_state["errores_detalle"].copy()
+                generar_reporte_excel(dl_dir, periodo, ips_nombre_actual, exitosas, errores)
+                crear_zip_completo(dl_dir, periodo, ips_nombre_actual)
                 return
 
-            for idx, fac in enumerate(facturas_objetivo, 1):
-                if job_state.get("stopping"): return
-                log(f"[{idx}/{len(facturas_objetivo)}] Factura {fac['num']} ({fac['tipo']})...")
+            # ========== PROCESAR FACTURAS PENDIENTES ==========
+            for idx, fac in enumerate(facturas_pendientes, 1):
+                if job_state.get("stopping"):
+                    log("🛑 Proceso detenido por el usuario durante el procesamiento de facturas.")
+                    if not zip_parcial_generado:
+                        generar_zip_parcial()
+                        zip_parcial_generado = True
+                    return
+                log(f"[{idx}/{len(facturas_pendientes)}] Factura {fac['num']} ({fac['tipo']})...")
                 try:
                     _download_factura(page, context, data_frame, fac, dl_dir, ips_nombre_actual)
                     with job_lock:
                         job_state["stats"]["descargadas"] += 1
+                    # Actualizar progreso
+                    completadas.add(fac['num'])
+                    guardar_progreso(ips_dir, completadas)
                     log(f"  ✅ Descargada: {fac['num']}", "success")
                 except Exception as e:
                     with job_lock:
@@ -953,7 +1191,7 @@ def run_automation(usuario: str, password: str, periodo: str, download_path: str
                             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         }
                         try:
-                            errores_dir = dl_dir / ips_nombre_actual / "Errores"
+                            errores_dir = ips_dir / "Errores"
                             errores_dir.mkdir(parents=True, exist_ok=True)
                             cap_path = errores_dir / f"ERROR_{fac['num']}.png"
                             page.screenshot(path=str(cap_path))
@@ -967,19 +1205,18 @@ def run_automation(usuario: str, password: str, periodo: str, download_path: str
 
             browser.close()
 
-            if job_state["errores_detalle"]:
-                errores_dir = dl_dir / ips_nombre_actual / "Errores"
-                errores_dir.mkdir(parents=True, exist_ok=True)
-                with open(errores_dir / "_errores.txt", "w", encoding="utf-8") as f:
-                    f.write("=== FACTURAS CON ERRORES ===\n")
-                    for err in job_state["errores_detalle"]:
-                        f.write(f"{err['timestamp']} - Factura {err['factura']}: {err['error']}\n")
-
-            excel_path = generar_reporte_excel(dl_dir, periodo, ips_nombre_actual,
-                                              job_state["descargas_exitosas"],
-                                              job_state["errores_detalle"])
+            # ========== GENERAR EXCEL FINAL ==========
+            with job_lock:
+                exitosas = job_state["descargas_exitosas"].copy()
+                errores = job_state["errores_detalle"].copy()
+            excel_path = generar_reporte_excel(dl_dir, periodo, ips_nombre_actual, exitosas, errores)
             if excel_path:
                 log(f"📊 Reporte Excel generado: {excel_path}")
+            else:
+                log("⚠️ No se pudo generar el Excel (openpyxl no instalado o error).", "warn")
+
+            # ========== ZIP FINAL (incluye Excel y Errores) ==========
+            crear_zip_completo(dl_dir, periodo, ips_nombre_actual)
 
             log("🎉 Proceso completado.")
 
@@ -990,6 +1227,9 @@ def run_automation(usuario: str, password: str, periodo: str, download_path: str
                 job_state["error"] = str(e)
         else:
             log("Proceso detenido por el usuario.")
+        # Generar ZIP parcial si no se había generado
+        if not zip_parcial_generado:
+            generar_zip_parcial()
     finally:
         with job_lock:
             job_state["running"] = False
@@ -997,6 +1237,9 @@ def run_automation(usuario: str, password: str, periodo: str, download_path: str
             job_state["stopping"] = False
         current_browser = None
         current_context = None
+        current_dl_dir = None
+        current_periodo = None
+        current_ips_nombre = None
 
 
 # ==================== RUTAS FLASK ====================
@@ -1023,6 +1266,7 @@ def start_job():
         job_state["stats"] = {"total": 0, "descargadas": 0, "errores": 0}
         job_state["errores_detalle"] = []
         job_state["descargas_exitosas"] = []
+        # Mantenemos facturas_permitidas si ya se cargaron
     dl_path = custom_path if custom_path else str(DOWNLOAD_DIR / periodo)
     t = threading.Thread(target=run_automation, args=(usuario, password, periodo, dl_path), daemon=True)
     t.start()
@@ -1038,12 +1282,32 @@ def stop_job_route():
 
 @app.route("/api/reset", methods=["POST"])
 def reset_job_route():
+    data = request.json or {}
+    periodo = data.get("periodo", "").strip()
+    
     with job_lock:
         if job_state["running"]:
             stop_job()
             time.sleep(2)
+    
+    # Borrar archivos de progreso del período indicado
+    if periodo:
+        periodo_dir = DOWNLOAD_DIR / periodo
+        if periodo_dir.exists():
+            # Buscar todos los archivos progreso.json dentro de las subcarpetas de IPS
+            for progreso_file in periodo_dir.glob("*/progreso.json"):
+                try:
+                    progreso_file.unlink()
+                    log(f"🗑️ Progreso eliminado: {progreso_file}")
+                except Exception as e:
+                    log(f"⚠️ Error al borrar {progreso_file}: {e}", "warn")
+        else:
+            log(f"⚠️ No existe la carpeta del período '{periodo}', no se borró progreso.", "warn")
+    else:
+        log("⚠️ No se especificó período, no se borró progreso.", "warn")
+    
     reset_state()
-    return jsonify({"ok": True, "message": "Estado reiniciado."})
+    return jsonify({"ok": True, "message": "Estado reiniciado y progreso eliminado. Puede iniciar una nueva descarga desde cero."})
 
 @app.route("/api/status")
 def get_status():
@@ -1091,6 +1355,173 @@ def get_periodos():
             count = len(list(d.glob("**/*.pdf")))
             periodos.append({"name": d.name, "count": count})
     return jsonify({"periodos": sorted(periodos, key=lambda x: x["name"], reverse=True)})
+
+# ========== RUTA PARA IMPORTAR FACTURAS (CSV/EXCEL) ==========
+@app.route("/api/upload", methods=["POST"])
+def upload_facturas():
+    if 'file' not in request.files:
+        return jsonify({"ok": False, "error": "No se envió ningún archivo"}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"ok": False, "error": "Archivo vacío"}), 400
+
+    try:
+        filename = file.filename.lower()
+        facturas = []
+        if filename.endswith('.csv'):
+            content = file.read().decode('utf-8')
+            reader = csv.DictReader(content.splitlines())
+            for row in reader:
+                for col, val in row.items():
+                    if 'factura' in col.lower():
+                        facturas.append(val.strip())
+                        break
+        elif filename.endswith(('.xls', '.xlsx')):
+            if not EXCEL_AVAILABLE:
+                return jsonify({"ok": False, "error": "openpyxl no instalado, no se pueden leer archivos Excel"}), 500
+            wb = openpyxl.load_workbook(BytesIO(file.read()), data_only=True)
+            ws = wb.active
+            col_idx = None
+            for cell in ws[1]:
+                if cell.value and 'factura' in str(cell.value).lower():
+                    col_idx = cell.column
+                    break
+            if col_idx is None:
+                return jsonify({"ok": False, "error": "No se encontró columna con 'factura' en el archivo"}), 400
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                val = row[col_idx-1]
+                if val:
+                    facturas.append(str(val).strip())
+        else:
+            return jsonify({"ok": False, "error": "Formato no soportado. Use CSV o Excel (.xlsx)"}), 400
+
+        facturas_limpias = [re.sub(r'\D', '', f) for f in facturas if re.sub(r'\D', '', f)]
+        if not facturas_limpias:
+            return jsonify({"ok": False, "error": "No se encontraron números de factura válidos en el archivo"}), 400
+
+        with job_lock:
+            job_state["facturas_permitidas"] = facturas_limpias
+        log(f"📄 Se cargaron {len(facturas_limpias)} facturas desde el archivo. Solo se descargarán estas.")
+        return jsonify({"ok": True, "count": len(facturas_limpias), "facturas": facturas_limpias[:10]})
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"Error al procesar archivo: {str(e)}"}), 500
+
+# ========== RUTA PARA CONSULTAR PROGRESO ==========
+@app.route("/api/progreso")
+def get_progreso():
+    periodo = request.args.get("periodo", "")
+    ips = request.args.get("ips", "")
+    if not periodo:
+        return jsonify({"ok": False, "error": "Se requiere el parámetro 'periodo'"}), 400
+    
+    periodo_dir = DOWNLOAD_DIR / periodo
+    if not periodo_dir.exists():
+        return jsonify({"ok": True, "completadas": [], "archivo": None, "mensaje": "No hay datos para este período"})
+    
+    # Determinar la carpeta IPS
+    if ips:
+        ips_dir = periodo_dir / ips
+        if not ips_dir.exists():
+            return jsonify({"ok": False, "error": f"No existe la IPS '{ips}' en este período"}), 404
+    else:
+        # Buscar la primera subcarpeta que contenga progreso.json o la primera que exista
+        posibles = list(periodo_dir.iterdir())
+        if not posibles:
+            return jsonify({"ok": True, "completadas": [], "archivo": None, "mensaje": "No hay subcarpetas de IPS"})
+        # Priorizar las que tengan progreso.json
+        ips_dir = None
+        for d in posibles:
+            if d.is_dir() and (d / "progreso.json").exists():
+                ips_dir = d
+                break
+        if not ips_dir:
+            # Tomar la primera carpeta
+            ips_dir = posibles[0] if posibles[0].is_dir() else None
+        if not ips_dir:
+            return jsonify({"ok": True, "completadas": [], "archivo": None, "mensaje": "No se encontró carpeta de IPS"})
+        ips = ips_dir.name
+    
+    progreso_path = ips_dir / "progreso.json"
+    if not progreso_path.exists():
+        return jsonify({"ok": True, "completadas": [], "archivo": str(progreso_path), "ips": ips, "mensaje": "Aún no hay facturas completadas"})
+    
+    try:
+        with open(progreso_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        completadas = data.get("completadas", [])
+        return jsonify({
+            "ok": True,
+            "completadas": completadas,
+            "cantidad": len(completadas),
+            "archivo": str(progreso_path),
+            "ips": ips,
+            "actualizado": data.get("actualizado", "")
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"Error al leer progreso: {str(e)}"}), 500
+
+# ========== NUEVA RUTA: EXPORTAR PROGRESO A EXCEL ==========
+@app.route("/api/exportar_progreso")
+def exportar_progreso_excel():
+    """Exporta la lista de facturas completadas a un archivo Excel descargable."""
+    periodo = request.args.get("periodo", "")
+    if not periodo:
+        return jsonify({"ok": False, "error": "Se requiere el parámetro 'periodo'"}), 400
+    
+    if not EXCEL_AVAILABLE:
+        return jsonify({"ok": False, "error": "openpyxl no instalado, no se puede generar el Excel"}), 500
+    
+    periodo_dir = DOWNLOAD_DIR / periodo
+    if not periodo_dir.exists():
+        return jsonify({"ok": False, "error": f"No existe la carpeta del período '{periodo}'"}), 404
+    
+    # Buscar el archivo progreso.json en la subcarpeta de IPS
+    progreso_files = list(periodo_dir.glob("*/progreso.json"))
+    if not progreso_files:
+        return jsonify({"ok": False, "error": f"No se encontró progreso.json para el período '{periodo}'"}), 404
+    
+    # Tomar el primero (normalmente solo hay una IPS por período)
+    progreso_path = progreso_files[0]
+    ips_dir = progreso_path.parent
+    ips_nombre = ips_dir.name
+    
+    try:
+        with open(progreso_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        completadas = data.get("completadas", [])
+        actualizado = data.get("actualizado", "")
+        
+        # Crear libro de trabajo
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Facturas completadas"
+        
+        # Encabezados
+        ws.append(["N° Factura", "Fecha de completado (última actualización)"])
+        # Datos
+        for factura in completadas:
+            ws.append([factura, actualizado])
+        
+        # Ajustar ancho de columnas
+        ws.column_dimensions['A'].width = 20
+        ws.column_dimensions['B'].width = 30
+        
+        # Guardar en un buffer en memoria
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        
+        # Nombre del archivo
+        filename = f"progreso_facturas_{periodo}_{ips_nombre}.xlsx"
+        
+        return send_file(
+            output,
+            as_attachment=True,
+            download_name=filename,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"Error al generar Excel: {str(e)}"}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5050))

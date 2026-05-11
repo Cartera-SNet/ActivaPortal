@@ -176,6 +176,19 @@
     background-color: #2980b9;
   }
   .btn-reset:hover { opacity: 0.9; }
+  .btn-progreso {
+    flex: 1;
+    padding: 10px;
+    border: none;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: opacity 0.2s;
+    color: white;
+    background-color: #8e44ad;
+  }
+  .btn-progreso:hover { opacity: 0.9; }
 
   .stats-bar {
     display: grid;
@@ -306,6 +319,80 @@
   .alert.info  { background: #ebf5fb; color: var(--blue); border-left: 3px solid var(--blue); }
   .alert.error { background: var(--red-light); color: var(--red); border-left: 3px solid var(--red); }
 
+  /* Modal styles */
+  .modal {
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0,0,0,0.5);
+    justify-content: center;
+    align-items: center;
+  }
+  .modal-content {
+    background: white;
+    border-radius: var(--radius);
+    width: 600px;
+    max-width: 90%;
+    max-height: 80%;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+  }
+  .modal-header {
+    padding: 15px 20px;
+    border-bottom: 1px solid #eee;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--blue);
+    color: white;
+  }
+  .modal-header h3 { margin: 0; }
+  .modal-close {
+    background: none;
+    border: none;
+    font-size: 1.5rem;
+    cursor: pointer;
+    color: white;
+  }
+  .modal-body {
+    padding: 20px;
+    overflow-y: auto;
+    flex: 1;
+  }
+  .modal-footer {
+    padding: 12px 20px;
+    border-top: 1px solid #eee;
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+  }
+  .factura-lista {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .factura-lista li {
+    padding: 6px 10px;
+    border-bottom: 1px solid #f0f0f0;
+    font-family: monospace;
+    font-size: 0.85rem;
+  }
+  .factura-lista li:hover { background: #f9f9f9; }
+  .badge-count {
+    background: var(--gray-dark);
+    color: white;
+    border-radius: 20px;
+    padding: 2px 8px;
+    font-size: 0.7rem;
+    margin-left: 8px;
+  }
+
   @media (max-width: 800px) {
     main { grid-template-columns: 1fr; }
   }
@@ -353,6 +440,14 @@
           <div class="path-display" id="pathDisplay">📂 Se usará: downloads/[periodo]/</div>
         </div>
 
+        <!-- Importar lista de facturas -->
+        <div class="form-group">
+          <label>📎 Importar lista de facturas (opcional)</label>
+          <input type="file" id="uploadFile" accept=".csv,.xlsx,.xls">
+          <button type="button" id="btnUpload" style="margin-top:8px; width:100%; background:#3498db; color:white; border:none; padding:6px; border-radius:6px; cursor:pointer;">Cargar lista</button>
+          <div id="uploadStatus" style="font-size:0.75rem; margin-top:4px;"></div>
+        </div>
+
         <div class="alert info">
           ℹ️ Se descargarán: <strong>Envios_D</strong> (Auditada: Pendiente) y <strong>ActaDevolucion</strong> (Devolución de entrada)
         </div>
@@ -364,6 +459,7 @@
         <div class="button-group">
           <button class="btn-stop" id="btnStop">⏹️ Detener</button>
           <button class="btn-reset" id="btnReset">🔄 Reiniciar</button>
+          <button class="btn-progreso" id="btnProgreso">📋 Ver progreso</button>
         </div>
 
       </div>
@@ -437,6 +533,25 @@
 
   </div>
 </main>
+
+<!-- Modal para Ver Progreso -->
+<div id="progresoModal" class="modal">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3>📋 Facturas completadas (progreso)</h3>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p id="modalInfo" style="margin-bottom: 12px;">Cargando...</p>
+      <ul id="modalLista" class="factura-lista"></ul>
+    </div>
+    <div class="modal-footer">
+      <button onclick="exportarProgresoExcel()" style="padding: 6px 12px; background-color: #27ae60; color: white; border: none; border-radius: 5px;">📎 Exportar Excel</button>
+      <button onclick="copiarLista()" style="padding: 6px 12px;">📋 Copiar lista</button>
+      <button onclick="closeModal()">Cerrar</button>
+    </div>
+  </div>
+</div>
 
 <script>
 // ── Períodos ──────────────────────────────────────────────────────────────
@@ -623,7 +738,29 @@ function fmtSize(bytes) {
   return (bytes/1024/1024).toFixed(1) + " MB";
 }
 
-// ── Botones Detener y Reiniciar ─────────────────────────────────────────
+// ── Carga de archivo (importar facturas) ──────────────────────────────────
+document.getElementById("btnUpload").addEventListener("click", async () => {
+  const fileInput = document.getElementById("uploadFile");
+  const file = fileInput.files[0];
+  if (!file) {
+    alert("Selecciona un archivo CSV o Excel primero.");
+    return;
+  }
+  const formData = new FormData();
+  formData.append("file", file);
+  const res = await fetch("/api/upload", { method: "POST", body: formData });
+  const data = await res.json();
+  const statusDiv = document.getElementById("uploadStatus");
+  if (data.ok) {
+    statusDiv.innerHTML = `✅ Cargadas ${data.count} facturas. Solo se descargarán esas.`;
+    statusDiv.style.color = "green";
+  } else {
+    statusDiv.innerHTML = `❌ Error: ${data.error}`;
+    statusDiv.style.color = "red";
+  }
+});
+
+// ── Botones Detener, Reiniciar y Ver Progreso ──────────────────────────
 document.getElementById("btnStop").addEventListener("click", async () => {
   const resp = await fetch("/api/stop", { method: "POST" });
   const data = await resp.json();
@@ -631,17 +768,103 @@ document.getElementById("btnStop").addEventListener("click", async () => {
 });
 
 document.getElementById("btnReset").addEventListener("click", async () => {
-  const resp = await fetch("/api/reset", { method: "POST" });
-  const data = await resp.json();
-  alert(data.message);
-  clearLogs();
-  refreshFiles();
-  setStatus("idle");
-  document.getElementById("btnStart").disabled = false;
-  if (polling) clearInterval(polling);
-  polling = null;
-  logCount = 0;
+  const periodo = document.getElementById("periodoCustom").value.trim();
+  if (!periodo) {
+    alert("No hay período seleccionado. Selecciona un período antes de reiniciar.");
+    return;
+  }
+  if (confirm(`¿Estás seguro de que deseas REINICIAR completamente el período ${periodo}?\n\nSe borrará el progreso de descarga (no se eliminarán los PDFs ya descargados).\nLa próxima ejecución descargará TODAS las facturas nuevamente.`)) {
+    const resp = await fetch("/api/reset", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ periodo: periodo })
+    });
+    const data = await resp.json();
+    alert(data.message);
+    clearLogs();
+    refreshFiles();
+    setStatus("idle");
+    document.getElementById("btnStart").disabled = false;
+    if (polling) clearInterval(polling);
+    polling = null;
+    logCount = 0;
+    document.getElementById("uploadStatus").innerHTML = "";
+  }
 });
+
+// Función para Ver Progreso (modal)
+async function verProgreso() {
+  const periodo = document.getElementById("periodoCustom").value.trim();
+  if (!periodo) {
+    alert("Selecciona un período primero.");
+    return;
+  }
+  const modal = document.getElementById("progresoModal");
+  const modalInfo = document.getElementById("modalInfo");
+  const modalLista = document.getElementById("modalLista");
+  modalLista.innerHTML = "";
+  modalInfo.innerHTML = "Cargando...";
+  modal.style.display = "flex";
+
+  try {
+    const resp = await fetch(`/api/progreso?periodo=${encodeURIComponent(periodo)}`);
+    const data = await resp.json();
+    if (!data.ok) {
+      modalInfo.innerHTML = `❌ Error: ${data.error}`;
+      return;
+    }
+    if (data.completadas && data.completadas.length > 0) {
+      modalInfo.innerHTML = `✅ Total facturas completadas: <strong>${data.cantidad}</strong> (IPS: ${data.ips || 'desconocida'})<br>Última actualización: ${data.actualizado || 'desconocida'}`;
+      const ul = modalLista;
+      data.completadas.forEach(f => {
+        const li = document.createElement("li");
+        li.textContent = f;
+        ul.appendChild(li);
+      });
+    } else {
+      modalInfo.innerHTML = `ℹ️ No hay facturas completadas para el período ${periodo}. ${data.mensaje || ''}`;
+      modalLista.innerHTML = '<li style="color:gray;">Ninguna factura registrada aún.</li>';
+    }
+  } catch (err) {
+    modalInfo.innerHTML = `❌ Error al consultar progreso: ${err.message}`;
+  }
+}
+
+document.getElementById("btnProgreso").addEventListener("click", verProgreso);
+
+function closeModal() {
+  document.getElementById("progresoModal").style.display = "none";
+}
+
+function copiarLista() {
+  const items = document.querySelectorAll("#modalLista li");
+  const texto = Array.from(items).map(li => li.textContent).join("\n");
+  if (!texto) return;
+  navigator.clipboard.writeText(texto).then(() => {
+    alert("Lista copiada al portapapeles.");
+  }).catch(() => {
+    alert("No se pudo copiar.");
+  });
+}
+
+// Nueva función: Exportar progreso a Excel
+async function exportarProgresoExcel() {
+  const periodo = document.getElementById("periodoCustom").value.trim();
+  if (!periodo) {
+    alert("No hay período seleccionado.");
+    return;
+  }
+  // Redirigir a la ruta de exportación
+  window.location.href = `/api/exportar_progreso?periodo=${encodeURIComponent(periodo)}`;
+}
+
+// Cerrar modal si se hace clic fuera del contenido
+window.onclick = function(event) {
+  const modal = document.getElementById("progresoModal");
+  if (event.target === modal) {
+    closeModal();
+  }
+}
 
 // ── Init ──────────────────────────────────────────────────────────────────
 buildPeriodGrid();
